@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en-NZ">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Reading Check – connection test</title>
+<style>
+  :root { --green:#127A6E; --green-light:#2BB5A0; --mint:#E6F5F2; --yellow:#FFC94A; --ink:#1F2D2B; --red:#C0392B; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system, system-ui, "Segoe UI", sans-serif; background:var(--mint); color:var(--ink); }
+  header { background:linear-gradient(var(--green-light), var(--green)); color:#fff; padding:18px 24px; font-size:22px; font-weight:700; }
+  main { max-width:640px; margin:0 auto; padding:20px; }
+  .card { background:#fff; border-radius:16px; padding:20px; margin-bottom:16px; box-shadow:0 2px 8px rgba(0,0,0,.06); }
+  h2 { margin:0 0 6px; font-size:19px; color:var(--green); }
+  p.hint { margin:0 0 14px; color:#4b5d5a; font-size:15px; }
+  label { display:block; font-weight:600; margin:10px 0 4px; }
+  input { width:100%; font-size:17px; padding:12px; border:2px solid #cfe5e1; border-radius:10px; }
+  button { font-size:18px; font-weight:700; border:0; border-radius:12px; padding:14px 20px; margin:12px 8px 0 0; cursor:pointer; }
+  .primary { background:var(--green); color:#fff; }
+  .yellow { background:var(--yellow); color:var(--ink); }
+  .stop { background:var(--red); color:#fff; }
+  button:disabled { opacity:.4; }
+  .status { margin-top:12px; padding:12px; border-radius:10px; font-size:16px; display:none; }
+  .ok { display:block; background:#E3F6E8; color:#1E6B34; }
+  .bad { display:block; background:#FBE5E3; color:var(--red); }
+  .info { display:block; background:#FFF6DC; color:#6B5100; }
+  .meter { height:16px; background:#e8efee; border-radius:8px; overflow:hidden; margin-top:14px; }
+  .meter div { height:100%; width:0; background:var(--yellow); transition:width .08s; }
+  .timer { font-size:32px; font-weight:700; margin-top:10px; font-variant-numeric:tabular-nums; }
+  audio { width:100%; margin-top:12px; }
+  .step { display:inline-block; background:var(--green); color:#fff; border-radius:50%; width:28px; height:28px; text-align:center; line-height:28px; margin-right:6px; }
+</style>
+</head>
+<body>
+<header>📖 Reading Check – connection test</header>
+<main>
+
+  <div class="card">
+    <h2><span class="step">1</span>Connect to the school</h2>
+    <p class="hint">Only needed once on each iPad. These are saved on this iPad only.</p>
+    <label for="url">Apps Script web app address (ends in /exec)</label>
+    <input id="url" type="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://script.google.com/macros/s/…/exec">
+    <label for="code">Staff passcode</label>
+    <input id="code" type="password" autocomplete="off">
+    <button class="primary" id="btnConnect">Save and check connection</button>
+    <div class="status" id="connStatus"></div>
+  </div>
+
+  <div class="card">
+    <h2><span class="step">2</span>Test the microphone</h2>
+    <p class="hint">Say anything for up to 10 seconds. Please don't use a student for this test.</p>
+    <button class="yellow" id="btnRec">🎙️ Start recording</button>
+    <button class="stop" id="btnStop" disabled>■ Stop</button>
+    <div class="timer" id="timer">0:00</div>
+    <div class="meter"><div id="level"></div></div>
+    <audio id="playback" controls hidden></audio>
+    <div class="status" id="micStatus"></div>
+  </div>
+
+  <div class="card">
+    <h2><span class="step">3</span>Send it to Google Drive</h2>
+    <p class="hint">Saves the test recording into the "Reading Check – connection test" folder in Drive.</p>
+    <button class="primary" id="btnSend" disabled>Send test recording</button>
+    <div class="status" id="sendStatus"></div>
+  </div>
+
+</main>
+<script>
+(function () {
+  "use strict";
+  const MAX_SECONDS = 10;
+  const TARGET_RATE = 16000;
+  const $ = (id) => document.getElementById(id);
+
+  // ---- Settings: kept on this iPad only (never sent to the page host) ----
+  function store(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  function load(k) { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } }
+
+  // Optional: IT can push a link ending in #url=...&code=... ; the part after # never leaves the iPad.
+  if (location.hash.length > 1) {
+    const p = new URLSearchParams(location.hash.slice(1));
+    if (p.get("url")) store("rc_url", p.get("url"));
+    if (p.get("code")) store("rc_code", p.get("code"));
+    history.replaceState(null, "", location.pathname);
+  }
+  $("url").value = load("rc_url");
+  $("code").value = load("rc_code");
+
+  function show(el, cls, msg) { el.className = "status " + cls; el.textContent = msg; }
+
+  async function callBackend(payload) {
+    const url = load("rc_url");
+    if (!/^https:\/\/script\.google\.com\/.+\/exec$/.test(url)) {
+      throw new Error("The address should start with https://script.google.com/ and end in /exec");
+    }
+    payload.passcode = load("rc_code");
+    let res;
+    try {
+      // text/plain keeps this a "simple" request that Apps Script accepts from another site
+      res = await fetch(url, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(payload) });
+    } catch (e) {
+      throw new Error("Couldn't reach the Apps Script. Check the deployment's 'Who has access' is set to Anyone, and that the iPad is online.");
+    }
+    const text = await res.text();
+    try { return JSON.parse(text); }
+    catch (e) { throw new Error("The Apps Script replied with a sign-in page or error instead of data. Check 'Who has access' is Anyone, then make a new deployment."); }
+  }
+
+  $("btnConnect").onclick = async () => {
+    store("rc_url", $("url").value.trim());
+    store("rc_code", $("code").value);
+    show($("connStatus"), "info", "Checking…");
+    try {
+      const r = await callBackend({ action: "ping" });
+      show($("connStatus"), r.ok ? "ok" : "bad", r.ok ? "✅ " + r.message : "❌ " + r.error);
+    } catch (e) { show($("connStatus"), "bad", "❌ " + e.message); }
+  };
+
+  // ---- Recording (Web Audio → WAV, held in memory only) ----
+  let ctx, stream, source, proc, chunks = [], recording = false, startTime = 0, tick, wavBlob = null;
+
+  $("btnRec").onclick = async () => {
+    wavBlob = null; $("btnSend").disabled = true; $("playback").hidden = true;
+    show($("sendStatus"), "", ""); $("sendStatus").style.display = "none";
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true } });
+    } catch (e) {
+      show($("micStatus"), "bad", "❌ Microphone blocked (" + e.name + "). Check Safari is allowed to use the microphone in Settings → Safari → Microphone, or ask IT.");
+      return;
+    }
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    await ctx.resume();
+    source = ctx.createMediaStreamSource(stream);
+    proc = ctx.createScriptProcessor(4096, 1, 1);
+    chunks = [];
+    proc.onaudioprocess = (ev) => {
+      if (!recording) return;
+      const d = ev.inputBuffer.getChannelData(0);
+      chunks.push(new Float32Array(d));
+      let peak = 0; for (let i = 0; i < d.length; i += 32) peak = Math.max(peak, Math.abs(d[i]));
+      $("level").style.width = Math.min(100, peak * 160) + "%";
+    };
+    source.connect(proc); proc.connect(ctx.destination);
+    recording = true; startTime = Date.now();
+    $("btnRec").disabled = true; $("btnStop").disabled = false;
+    show($("micStatus"), "info", "Recording… speak now.");
+    tick = setInterval(() => {
+      const s = Math.floor((Date.now() - startTime) / 1000);
+      $("timer").textContent = "0:" + String(s).padStart(2, "0");
+      if (s >= MAX_SECONDS) stopRec();
+    }, 200);
+  };
+
+  function stopRec() {
+    if (!recording) return;
+    recording = false; clearInterval(tick);
+    const rate = ctx.sampleRate;
+    source.disconnect(); proc.disconnect();
+    stream.getTracks().forEach((t) => t.stop());
+    ctx.close();
+    $("level").style.width = "0";
+    $("btnRec").disabled = false; $("btnStop").disabled = true;
+    const samples = downsample(merge(chunks), rate, TARGET_RATE);
+    chunks = [];
+    if (samples.length < TARGET_RATE / 2) { show($("micStatus"), "bad", "❌ Recording was empty. Try again."); return; }
+    wavBlob = encodeWav(samples, TARGET_RATE);
+    $("playback").src = URL.createObjectURL(wavBlob);
+    $("playback").hidden = false;
+    show($("micStatus"), "ok", "✅ Microphone works. Press play to check you can hear it.");
+    $("btnSend").disabled = false;
+  }
+  $("btnStop").onclick = stopRec;
+
+  function merge(list) {
+    let n = 0; list.forEach((c) => (n += c.length));
+    const out = new Float32Array(n); let o = 0;
+    list.forEach((c) => { out.set(c, o); o += c.length; });
+    return out;
+  }
+  function downsample(buf, from, to) {
+    if (from === to) return buf;
+    const ratio = from / to, len = Math.floor(buf.length / ratio), out = new Float32Array(len);
+    for (let i = 0; i < len; i++) {
+      const a = Math.floor(i * ratio), b = Math.min(buf.length, Math.floor((i + 1) * ratio));
+      let s = 0; for (let j = a; j < b; j++) s += buf[j];
+      out[i] = s / Math.max(1, b - a);
+    }
+    return out;
+  }
+  function encodeWav(samples, rate) {
+    const buf = new ArrayBuffer(44 + samples.length * 2), v = new DataView(buf);
+    const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    w(0, "RIFF"); v.setUint32(4, 36 + samples.length * 2, true); w(8, "WAVE"); w(12, "fmt ");
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    w(36, "data"); v.setUint32(40, samples.length * 2, true);
+    for (let i = 0, o = 44; i < samples.length; i++, o += 2) {
+      const x = Math.max(-1, Math.min(1, samples[i]));
+      v.setInt16(o, x < 0 ? x * 0x8000 : x * 0x7fff, true);
+    }
+    return new Blob([buf], { type: "audio/wav" });
+  }
+  async function toBase64(blob) {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let bin = ""; const step = 0x8000;
+    for (let i = 0; i < bytes.length; i += step) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + step));
+    return btoa(bin);
+  }
+
+  // ---- Send ----
+  $("btnSend").onclick = async () => {
+    if (!wavBlob) return;
+    $("btnSend").disabled = true;
+    show($("sendStatus"), "info", "Sending…");
+    try {
+      const r = await callBackend({ action: "saveTest", audio: await toBase64(wavBlob) });
+      if (r.ok) {
+        show($("sendStatus"), "ok", "✅ Saved \"" + r.fileName + "\" (" + r.sizeKB + " KB) in the \"" + r.folderName + "\" folder. All three checks passed!");
+        wavBlob = null; // clear from memory once Drive has it
+        $("playback").removeAttribute("src"); $("playback").hidden = true;
+      } else {
+        show($("sendStatus"), "bad", "❌ " + r.error);
+        $("btnSend").disabled = false; // keep recording so they can try again
+      }
+    } catch (e) {
+      show($("sendStatus"), "bad", "❌ " + e.message);
+      $("btnSend").disabled = false;
+    }
+  };
+
+  window.addEventListener("beforeunload", (e) => { if (wavBlob) { e.preventDefault(); e.returnValue = ""; } });
+})();
+</script>
+</body>
+</html>
